@@ -371,7 +371,7 @@ AVOID:
 - NEVER invent rate_func names
 - NEVER use np.sin inside always_redraw without importing numpy (use import numpy as np at top)
 - NEVER create more than 50 objects in a loop
-- NEVER use Tex or MathTex (requires LaTeX - use Text() instead)
+- NEVER use Tex, MathTex, or any LaTeX — ALWAYS use Text() instead, no exceptions
 - NEVER use 3D scenes (ThreeDScene) - stick to regular Scene
 - NEVER skip self.wait() between major animation steps"""
 
