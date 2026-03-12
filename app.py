@@ -458,13 +458,18 @@ def generate_manim_code(prompt: str) -> str:
 
 def render_manim(code: str) -> tuple[bool, str, str]:
     """
-    Windows-proof Manim renderer.
-    Renders at medium quality (30fps) using PNG frame export,
-    then encodes with ffmpeg for a smooth glitch-free result.
+    Cross-platform Manim renderer (Windows + Linux/Streamlit Cloud).
+    Renders PNG frames then encodes with ffmpeg for glitch-free output.
     """
-    import threading, time
+    import threading, time, platform
 
-    work_dir   = "C:\\manim_tmp"
+    IS_WINDOWS = platform.system() == "Windows"
+
+    if IS_WINDOWS:
+        work_dir = "C:\\manim_tmp"
+    else:
+        work_dir = os.path.join(os.path.expanduser("~"), "manim_tmp")
+
     out_dir    = os.path.join(work_dir, "output")
     stable     = os.path.join(work_dir, "latest.mp4")
     scene_file = os.path.join(work_dir, "scene.py")
