@@ -294,6 +294,32 @@ hr { border-color: rgba(255,255,255,0.07) !important; margin: 2rem 0 !important;
 .mobile-only { display: none !important; }
 .desktop-only { display: block !important; }
 
+/* ── Quality selector buttons ── */
+button[kind="secondary"], .stButton > button {
+    background-color: #0d0d14 !important;
+    border: 1.5px solid rgba(251,191,36,0.3) !important;
+    color: #ffffff !important;
+    font-family: 'Syne', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.05em !important;
+    border-radius: 10px !important;
+    transition: all 0.2s ease !important;
+}
+.stButton > button:hover {
+    background-color: #1a1a2e !important;
+    border-color: #fbbf24 !important;
+    color: #fbbf24 !important;
+    box-shadow: 0 0 16px rgba(251,191,36,0.2) !important;
+    transform: translateY(-1px) !important;
+}
+.stButton > button:focus, .stButton > button:active {
+    background-color: #0d0d14 !important;
+    border-color: #fbbf24 !important;
+    color: #fbbf24 !important;
+    box-shadow: 0 0 12px rgba(251,191,36,0.25) !important;
+}
+
 @media (max-width: 768px) {
     .mobile-only  { display: block !important; }
     .desktop-only { display: none  !important; }
@@ -456,10 +482,10 @@ def generate_manim_code(prompt: str) -> str:
     raw = re.sub(r"\n?```\s*$",       "", raw, flags=re.MULTILINE)
     return raw.strip()
 
-def render_manim(code: str) -> tuple[bool, str, str]:
+def render_manim(code: str, quality: str = "medium") -> tuple[bool, str, str]:
     """
     Cross-platform Manim renderer (Windows + Linux/Streamlit Cloud).
-    Renders PNG frames then encodes with ffmpeg for glitch-free output.
+    quality: "low" (480p15), "medium" (720p30), "high" (1080p60)
     """
     import threading, time, platform
 
@@ -485,8 +511,16 @@ def render_manim(code: str) -> tuple[bool, str, str]:
         shutil.rmtree(out_dir, ignore_errors=True)
     os.makedirs(out_dir, exist_ok=True)
 
-    # ── Attempt 1: Normal -qm render (medium quality = 30fps, smoother) ──────
-    partial_root = os.path.join(out_dir, "videos", "scene", "854p30",
+    # ── Quality settings ─────────────────────────────────────────────────────
+    quality_map = {
+        "low":    ("-ql", "480p15",  15, 240),
+        "medium": ("-qm", "720p30",  30, 300),
+        "high":   ("-qh", "1080p60", 60, 420),
+    }
+    q_flag, q_folder, q_fps, q_timeout = quality_map.get(quality, quality_map["medium"])
+
+    # ── Attempt 1: Normal render ──────────────────────────────────────────────
+    partial_root = os.path.join(out_dir, "videos", "scene", q_folder,
                                 "partial_movie_files", "GeneratedScene")
     concat_path  = os.path.join(partial_root, "partial_movie_file_list.txt")
 
@@ -504,10 +538,10 @@ def render_manim(code: str) -> tuple[bool, str, str]:
     threading.Thread(target=patcher, daemon=True).start()
 
     r1 = subprocess.run(
-        ["manim", "render", "-qm", "--disable_caching",
+        ["manim", "render", q_flag, "--disable_caching",
          "--media_dir", out_dir, scene_file, "GeneratedScene"],
         capture_output=True, text=True, cwd=work_dir,
-        timeout=240, encoding="utf-8", errors="replace",
+        timeout=q_timeout, encoding="utf-8", errors="replace",
     )
     stop_evt.set()
     log1 = (r1.stderr + "\n" + r1.stdout).strip()
@@ -535,7 +569,7 @@ def render_manim(code: str) -> tuple[bool, str, str]:
     os.makedirs(out_dir, exist_ok=True)
 
     r2 = subprocess.run(
-        ["manim", "render", "-ql", "--disable_caching",
+        ["manim", "render", q_flag, "--disable_caching",
          "--media_dir", out_dir,
          "--format", "png",
          scene_file, "GeneratedScene"],
@@ -554,7 +588,7 @@ def render_manim(code: str) -> tuple[bool, str, str]:
             frames_src = root
 
     if frames_src and best_count > 0:
-        fps = 15  # -ql = 15fps
+        fps = q_fps
 
         # Sort frames numerically
         pngs_sorted = sorted(
@@ -705,6 +739,38 @@ prompt = st.text_area(
     key="prompt_box",
 )
 
+# ── Quality selector ─────────────────────────────────────────────────────────
+st.markdown("""
+<div style="margin-bottom:0.4rem">
+  <span style="font-size:0.75rem;font-weight:700;letter-spacing:0.1em;
+               text-transform:uppercase;color:#fbbf24;">Render Quality</span>
+</div>
+""", unsafe_allow_html=True)
+
+q_col1, q_col2, q_col3 = st.columns(3)
+with q_col1:
+    q_low = st.button("LOW  —  480p", use_container_width=True,
+                      help="Fastest — 480p 15fps. Good for testing.")
+with q_col2:
+    q_med = st.button("MEDIUM  —  720p", use_container_width=True,
+                      help="Balanced — 720p 30fps. Recommended.")
+with q_col3:
+    q_hi  = st.button("HIGH  —  1080p", use_container_width=True,
+                       help="Best quality — 1080p 60fps. Slower render.")
+
+if q_low:
+    st.session_state["quality"] = "low"
+elif q_med:
+    st.session_state["quality"] = "medium"
+elif q_hi:
+    st.session_state["quality"] = "high"
+
+if "quality" not in st.session_state:
+    st.session_state["quality"] = "medium"
+
+quality_labels = {"low": "LOW 480p", "medium": "MEDIUM 720p", "high": "HIGH 1080p"}
+st.caption(f"Selected: **{quality_labels[st.session_state['quality']]}**")
+
 st.markdown("<br>", unsafe_allow_html=True)
 btn_col, _ = st.columns([2, 3])
 with btn_col:
@@ -729,9 +795,9 @@ if go:
             st.session_state["generated_code"] = code
 
             # Step 2 — first render attempt
-            with st.spinner("Manim is rendering your animation... (~15-40s on first run)"):
+            with st.spinner(f"Rendering at {quality_labels[st.session_state.get('quality', 'medium')]}... (~15-60s)"):
                 try:
-                    success, video_path, err = render_manim(code)
+                    success, video_path, err = render_manim(code, st.session_state.get("quality", "medium"))
                 except subprocess.TimeoutExpired:
                     success, video_path, err = False, "", "Render timed out after 120s."
 
@@ -744,7 +810,7 @@ if go:
                     st.session_state["generated_code"] = fixed_code
                     with st.spinner("Re-rendering with fixed code..."):
                         try:
-                            success, video_path, err = render_manim(fixed_code)
+                            success, video_path, err = render_manim(fixed_code, st.session_state.get("quality", "medium"))
                         except subprocess.TimeoutExpired:
                             success, video_path, err = False, "", "Render timed out after 120s."
 
@@ -783,7 +849,7 @@ elif st.session_state["generated_code"]:
 if st.session_state["render_error"]:
     with st.expander("Render Error Details"):
         st.code(st.session_state["render_error"], language="bash")
-
+ 
 # ── History ───────────────────────────────────────────────────────────────────
 if st.session_state["history"]:
     st.markdown("---")
