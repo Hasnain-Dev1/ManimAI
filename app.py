@@ -10,7 +10,7 @@ import threading
 import time
 
 import streamlit as st
-from groq import Groq
+from openai import OpenAI
 
 st.set_page_config(page_title="ManimAI - Prompt to Animation", page_icon="🎬",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -78,7 +78,8 @@ hr { border-color:rgba(255,255,255,.07) !important; margin:2rem 0 !important; }
 """, unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-20b"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 VALID_RATE_FUNCS = {
     "linear", "smooth", "rush_into", "rush_from", "slow_into", "double_smooth",
@@ -152,7 +153,7 @@ def get_client():
     if not key:
         return None
     if st.session_state.get("_client_key") != key:
-        st.session_state["_client"] = Groq(api_key=key)
+        st.session_state["_client"] = OpenAI(api_key=key, base_url=GROQ_BASE_URL)
         st.session_state["_client_key"] = key
     return st.session_state["_client"]
 
@@ -196,9 +197,15 @@ def ask_groq(messages, temperature) -> str:
     client = get_client()
     if client is None:
         raise RuntimeError("Please add your Groq API key first.")
-    resp = client.chat.completions.create(model=GROQ_MODEL, messages=messages,
-                                          temperature=temperature, max_tokens=4096)
-    return clean_code(resp.choices[0].message.content or "")
+    # Groq's OpenAI-compatible Responses API. gpt-oss is a reasoning model, so
+    # leave plenty of output tokens (reasoning tokens count toward the limit).
+    resp = client.responses.create(
+        model=GROQ_MODEL,
+        input=messages,
+        temperature=temperature,
+        max_output_tokens=8192,
+    )
+    return clean_code(resp.output_text or "")
 
 
 def _find_mp4(out_dir):
@@ -303,7 +310,7 @@ def use_example(text):
 with st.sidebar:
     st.markdown("### Model")
     st.code(GROQ_MODEL)
-    st.caption("Llama 3.3 70B — fast, free, great at code")
+    st.caption("OpenAI GPT-OSS 20B on Groq — fast and great at code")
     st.markdown("---")
     st.markdown("### Prompt Tips")
     st.markdown("""
