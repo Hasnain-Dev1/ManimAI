@@ -10,7 +10,7 @@ import threading
 import time
 
 import streamlit as st
-from openai import OpenAI
+from groq import BadRequestError, Groq
 
 st.set_page_config(page_title="ManimAI - Prompt to Animation", page_icon="🎬",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -78,8 +78,12 @@ hr { border-color:rgba(255,255,255,.07) !important; margin:2rem 0 !important; }
 """, unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-GROQ_MODEL = "openai/gpt-oss-20b"
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+# Model IDs from console.groq.com/docs/models
+GROQ_MODELS = {
+    "openai/gpt-oss-120b": "GPT-OSS 120B — best quality",
+    "openai/gpt-oss-20b": "GPT-OSS 20B — fastest",
+    "llama-3.3-70b-versatile": "Llama 3.3 70B — reliable",
+}
 
 VALID_RATE_FUNCS = {
     "linear", "smooth", "rush_into", "rush_from", "slow_into", "double_smooth",
@@ -135,7 +139,7 @@ EXAMPLES = ["Bouncing neon ball", "Pythagorean theorem", "Fourier wave series", 
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for k, v in {"generated_code": "", "video_path": "", "render_error": "",
-             "history": [], "groq_api_key": "", "quality": "medium", "prompt_box": ""}.items():
+             "history": [], "groq_api_key": "", "model": "openai/gpt-oss-120b", "quality": "medium", "prompt_box": ""}.items():
     st.session_state.setdefault(k, v)
 
 if not st.session_state["groq_api_key"]:  # env / secrets fallback
@@ -153,7 +157,7 @@ def get_client():
     if not key:
         return None
     if st.session_state.get("_client_key") != key:
-        st.session_state["_client"] = OpenAI(api_key=key, base_url=GROQ_BASE_URL)
+        st.session_state["_client"] = Groq(api_key=key)
         st.session_state["_client_key"] = key
     return st.session_state["_client"]
 
@@ -197,15 +201,17 @@ def ask_groq(messages, temperature) -> str:
     client = get_client()
     if client is None:
         raise RuntimeError("Please add your Groq API key first.")
-    # Groq's OpenAI-compatible Responses API. gpt-oss is a reasoning model, so
-    # leave plenty of output tokens (reasoning tokens count toward the limit).
-    resp = client.responses.create(
-        model=GROQ_MODEL,
-        input=messages,
-        temperature=temperature,
-        max_output_tokens=8192,
-    )
-    return clean_code(resp.output_text or "")
+    model = st.session_state.get("model", "openai/gpt-oss-120b")
+    kwargs = dict(model=model, messages=messages, temperature=temperature,
+                  max_completion_tokens=8192)
+    if model.startswith("openai/gpt-oss"):
+        kwargs["reasoning_effort"] = "low"  # keep thinking short so code isn't cut off
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except BadRequestError:
+        kwargs.pop("reasoning_effort", None)
+        resp = client.chat.completions.create(**kwargs)
+    return clean_code(resp.choices[0].message.content or "")
 
 
 def _find_mp4(out_dir):
@@ -309,8 +315,9 @@ def use_example(text):
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### Model")
-    st.code(GROQ_MODEL)
-    st.caption("OpenAI GPT-OSS 20B on Groq — fast and great at code")
+    st.selectbox("Groq model", list(GROQ_MODELS), key="model",
+                 format_func=GROQ_MODELS.get, label_visibility="collapsed")
+    st.caption("Served by GroqCloud")
     st.markdown("---")
     st.markdown("### Prompt Tips")
     st.markdown("""
