@@ -1,332 +1,78 @@
 # -*- coding: utf-8 -*-
-import streamlit as st
-from groq import Groq
-import subprocess
-import tempfile
+import ast
 import os
+import platform
 import re
 import shutil
-import unicodedata
+import subprocess
+import tempfile
+import threading
+import time
 
-# ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="ManimAI - Prompt to Animation",
-    page_icon="A",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+import streamlit as st
+from groq import Groq
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="ManimAI - Prompt to Animation", page_icon="🎬",
+                   layout="wide", initial_sidebar_state="collapsed")
+
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
-
-/* ── Base ── */
-html, body,
-[data-testid="stAppViewContainer"],
-[data-testid="stMain"] {
-    background: #0d0d14 !important;
-    color: #ffffff !important;
-    font-family: 'Syne', sans-serif !important;
+html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background:#0d0d14 !important; color:#fff !important; font-family:'Syne',sans-serif !important;
 }
 [data-testid="stAppViewContainer"] {
-    background:
-        radial-gradient(ellipse 70% 45% at 15% 0%, #0d1f3c 0%, transparent 55%),
-        radial-gradient(ellipse 55% 40% at 85% 5%, #1a0d2e 0%, transparent 50%),
-        #0d0d14 !important;
+    background: radial-gradient(ellipse 70% 45% at 15% 0%, #0d1f3c 0%, transparent 55%),
+                radial-gradient(ellipse 55% 40% at 85% 5%, #1a0d2e 0%, transparent 50%), #0d0d14 !important;
 }
+#MainMenu, footer, [data-testid="stDecoration"] { display:none !important; }
+[data-testid="stHeader"] { background:transparent !important; }  /* keep sidebar toggle visible */
+[data-testid="stMainBlockContainer"] { padding:2rem 3rem !important; max-width:1100px !important; margin:0 auto !important; }
 
-/* Hide chrome */
-#MainMenu, footer, header,
-[data-testid="stToolbar"],
-[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stSidebar"] { background:#0a0a12 !important; border-right:1px solid rgba(251,191,36,.15) !important; }
+[data-testid="stSidebar"] h3 { color:#fbbf24 !important; font-weight:700 !important; }
+[data-testid="stSidebar"] li { color:#9aa3b8 !important; font-style:italic; font-size:.84rem !important; }
 
-[data-testid="stMainBlockContainer"] {
-    padding: 2rem 3rem !important;
-    max-width: 1100px !important;
-    margin: 0 auto !important;
-}
+.hero-badge { display:inline-block; background:rgba(251,191,36,.12); border:1px solid rgba(251,191,36,.35);
+    border-radius:999px; padding:5px 16px; font-size:.72rem; font-weight:700; letter-spacing:.12em;
+    color:#fbbf24; text-transform:uppercase; margin-bottom:1.2rem; }
+.hero-title { font-size:clamp(3rem,7vw,5.5rem); font-weight:800; letter-spacing:-.04em; line-height:.95; margin-bottom:.6rem; }
+.hero-title span { background:linear-gradient(90deg,#fbbf24,#f97316 50%,#ef4444);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+.hero-sub { font-size:1.05rem; color:#8892aa; line-height:1.6; margin-bottom:1.5rem; }
+.sec-title { font-size:.7rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:#6b7590; margin-bottom:.6rem; }
 
-/* ══════════════════════════════
-   SIDEBAR
-══════════════════════════════ */
-[data-testid="stSidebar"] {
-    background: #0a0a12 !important;
-    border-right: 1px solid rgba(251,191,36,0.15) !important;
+.stTextArea textarea, .stTextInput input {
+    background:#1c1c2e !important; border:1.5px solid rgba(255,255,255,.18) !important; border-radius:12px !important;
+    color:#fff !important; font-family:'JetBrains Mono',monospace !important; caret-color:#fbbf24 !important;
 }
-/* All text in sidebar white by default */
-[data-testid="stSidebar"],
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] li,
-[data-testid="stSidebar"] div {
-    color: #ffffff !important;
-}
-/* Sidebar headings gold */
-[data-testid="stSidebar"] h3,
-[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h1 {
-    color: #fbbf24 !important;
-    font-family: 'Syne', sans-serif !important;
-    font-weight: 700 !important;
-    letter-spacing: -0.01em !important;
-}
-/* Muted sidebar text */
-[data-testid="stSidebar"] .stCaption,
-[data-testid="stSidebar"] small {
-    color: #6b7a99 !important;
-}
-/* Sidebar code/monospace (model name) */
-[data-testid="stSidebar"] code,
-[data-testid="stSidebar"] pre {
-    background: rgba(251,191,36,0.1) !important;
-    border: 1px solid rgba(251,191,36,0.25) !important;
-    border-radius: 6px !important;
-    color: #fbbf24 !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    padding: 2px 8px !important;
-    font-size: 0.85rem !important;
-}
-/* Sidebar password input */
-[data-testid="stSidebar"] input[type="password"] {
-    background: #1c1c2e !important;
-    border: 1.5px solid rgba(251,191,36,0.3) !important;
-    border-radius: 10px !important;
-    color: #ffffff !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 0.88rem !important;
-    caret-color: #fbbf24 !important;
-}
-[data-testid="stSidebar"] input[type="password"]:focus {
-    border-color: #fbbf24 !important;
-    box-shadow: 0 0 0 3px rgba(251,191,36,0.15) !important;
-    outline: none !important;
-}
-[data-testid="stSidebar"] input::placeholder {
-    color: #3a4260 !important;
-}
-/* Sidebar label */
-[data-testid="stSidebar"] label {
-    color: #8892aa !important;
-    font-size: 0.78rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.05em !important;
-    text-transform: uppercase !important;
-}
-/* Sidebar alerts */
-[data-testid="stSidebar"] [data-testid="stAlert"] {
-    border-radius: 10px !important;
-    font-size: 0.82rem !important;
-}
-/* Sidebar divider */
-[data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.08) !important;
-    margin: 1rem 0 !important;
-}
-/* Sidebar bullet list */
-[data-testid="stSidebar"] ul {
-    padding-left: 1.1rem !important;
-}
-[data-testid="stSidebar"] ul li {
-    color: #9aa3b8 !important;
-    font-size: 0.84rem !important;
-    margin-bottom: 0.4rem !important;
-    font-style: italic;
-}
+.stTextArea textarea:focus, .stTextInput input:focus { border-color:#fbbf24 !important; box-shadow:0 0 0 3px rgba(251,191,36,.15) !important; }
+.stTextArea label, .stTextInput label, .stRadio label { color:#8892aa !important; }
 
-/* ══════════════════════════════
-   HERO
-══════════════════════════════ */
-.hero-badge {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(251,191,36,0.12);
-    border: 1px solid rgba(251,191,36,0.35);
-    border-radius: 999px;
-    padding: 5px 16px;
-    font-size: 0.72rem; font-weight: 700;
-    letter-spacing: 0.12em; color: #fbbf24;
-    text-transform: uppercase; margin-bottom: 1.2rem;
+/* Secondary buttons (example chips) */
+.stButton > button[kind="secondary"] {
+    background:rgba(255,255,255,.05) !important; border:1px solid rgba(255,255,255,.12) !important;
+    border-radius:999px !important; color:#9aa3b8 !important; font-size:.78rem !important; padding:.2rem .6rem !important;
 }
-.hero-title {
-    font-size: clamp(3rem, 7vw, 5.5rem);
-    font-weight: 800; letter-spacing: -0.04em;
-    line-height: 0.95; color: #ffffff; margin-bottom: 0.6rem;
+.stButton > button[kind="secondary"]:hover { border-color:#fbbf24 !important; color:#fbbf24 !important; }
+/* Primary = Generate */
+.stButton > button[kind="primary"] {
+    background:linear-gradient(135deg,#f97316,#fbbf24) !important; border:none !important; border-radius:12px !important;
+    color:#0a0a0a !important; font-weight:800 !important; font-size:1.05rem !important; padding:.75rem 2rem !important;
+    box-shadow:0 4px 24px rgba(251,191,36,.3) !important; transition:transform .15s !important;
 }
-.hero-title span {
-    background: linear-gradient(90deg, #fbbf24 0%, #f97316 50%, #ef4444 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-.hero-sub {
-    font-size: 1.05rem; color: #8892aa;
-    font-weight: 400; line-height: 1.6; margin-bottom: 2rem;
-}
+.stButton > button[kind="primary"]:hover { transform:translateY(-2px) !important; }
 
-/* ══════════════════════════════
-   MAIN INPUTS  (bright white text)
-══════════════════════════════ */
-.stTextArea > div > div > textarea,
-.stTextInput > div > div > input {
-    background: #1c1c2e !important;
-    border: 1.5px solid rgba(255,255,255,0.18) !important;
-    border-radius: 12px !important;
-    color: #ffffff !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 0.95rem !important;
-    caret-color: #fbbf24 !important;
-    line-height: 1.6 !important;
-}
-.stTextArea > div > div > textarea:focus,
-.stTextInput > div > div > input:focus {
-    border-color: #fbbf24 !important;
-    box-shadow: 0 0 0 3px rgba(251,191,36,0.15) !important;
-    outline: none !important;
-}
-.stTextArea > div > div > textarea::placeholder,
-.stTextInput > div > div > input::placeholder {
-    color: #4a5270 !important;
-}
-.stTextArea label, .stTextInput label {
-    color: #8892aa !important;
-    font-size: 0.82rem !important;
-    font-weight: 600 !important;
-}
+[data-testid="stDownloadButton"] button { background:rgba(255,255,255,.06) !important; border:1px solid rgba(255,255,255,.15) !important; color:#fff !important; border-radius:10px !important; }
+[data-testid="stCode"] { background:#10101c !important; border:1px solid rgba(255,255,255,.08) !important; border-radius:14px !important; }
+pre, pre code { font-family:'JetBrains Mono',monospace !important; font-size:.8rem !important; }
+video { border-radius:16px !important; box-shadow:0 0 0 1px rgba(251,191,36,.2), 0 16px 60px rgba(0,0,0,.8) !important; width:100% !important; }
+hr { border-color:rgba(255,255,255,.07) !important; margin:2rem 0 !important; }
 
-/* ── Example tags ── */
-.tag {
-    display: inline-block;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 999px;
-    padding: 0.25rem 0.9rem;
-    font-size: 0.78rem; color: #9aa3b8;
-    margin: 0.2rem 0.25rem 0.2rem 0;
-    font-family: 'JetBrains Mono', monospace;
-}
-
-/* ── Generate button ── */
-.stButton > button {
-    background: linear-gradient(135deg, #f97316 0%, #fbbf24 100%) !important;
-    border: none !important; border-radius: 12px !important;
-    color: #0a0a0a !important;
-    font-family: 'Syne', sans-serif !important;
-    font-size: 1.05rem !important; font-weight: 800 !important;
-    padding: 0.75rem 2rem !important; width: 100% !important;
-    box-shadow: 0 4px 24px rgba(251,191,36,0.3) !important;
-    transition: transform 0.15s, box-shadow 0.2s !important;
-}
-.stButton > button:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 8px 32px rgba(251,191,36,0.45) !important;
-}
-.stButton > button:active { transform: translateY(0) !important; }
-
-/* ── Download button ── */
-[data-testid="stDownloadButton"] button {
-    background: rgba(255,255,255,0.06) !important;
-    border: 1px solid rgba(255,255,255,0.15) !important;
-    color: #ffffff !important;
-    font-size: 0.9rem !important; font-weight: 600 !important;
-    box-shadow: none !important; border-radius: 10px !important;
-}
-[data-testid="stDownloadButton"] button:hover {
-    background: rgba(255,255,255,0.1) !important;
-}
-
-/* ── Code blocks ── */
-.stCode, [data-testid="stCode"] {
-    background: #10101c !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
-    border-radius: 14px !important;
-}
-pre, pre code {
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 0.8rem !important; line-height: 1.65 !important;
-}
-
-/* ── Video ── */
-video {
-    border-radius: 16px !important;
-    box-shadow: 0 0 0 1px rgba(251,191,36,0.2),
-                0 16px 60px rgba(0,0,0,0.8) !important;
-    width: 100% !important;
-}
-
-hr { border-color: rgba(255,255,255,0.07) !important; margin: 2rem 0 !important; }
-.stSpinner > div { border-top-color: #fbbf24 !important; }
-.stAlert { border-radius: 12px !important; }
-.sec-title {
-    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em;
-    text-transform: uppercase; color: #4a5568; margin-bottom: 0.6rem;
-}
-
-/* ── Mobile API key card ── */
-.mobile-api-card {
-    background: rgba(251,191,36,0.06);
-    border: 1.5px solid rgba(251,191,36,0.3);
-    border-radius: 16px;
-    padding: 1.2rem 1.3rem;
-    margin-bottom: 1.5rem;
-}
-.mobile-api-title {
-    font-size: 0.75rem; font-weight: 700;
-    letter-spacing: 0.1em; text-transform: uppercase;
-    color: #fbbf24; margin-bottom: 0.4rem;
-}
-.mobile-api-sub {
-    font-size: 0.83rem; color: #8892aa; margin-bottom: 0.75rem;
-    line-height: 1.5;
-}
-.mobile-api-sub a { color: #fbbf24; text-decoration: underline; }
-.key-saved {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(34,197,94,0.12);
-    border: 1px solid rgba(34,197,94,0.3);
-    border-radius: 8px; padding: 5px 12px;
-    font-size: 0.8rem; color: #22c55e;
-    font-family: 'JetBrains Mono', monospace;
-}
-.dot-g { width:7px;height:7px;border-radius:50%;background:#22c55e;
-         box-shadow:0 0 6px #22c55e;display:inline-block; }
-
-/* ── Hide mobile card on desktop, show on mobile ── */
-.mobile-only { display: none !important; }
-.desktop-only { display: block !important; }
-
-/* ── Quality selector buttons ── */
-button[kind="secondary"], .stButton > button {
-    background-color: #0d0d14 !important;
-    border: 1.5px solid rgba(251,191,36,0.3) !important;
-    color: #ffffff !important;
-    font-family: 'Syne', sans-serif !important;
-    font-size: 0.82rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.05em !important;
-    border-radius: 10px !important;
-    transition: all 0.2s ease !important;
-}
-.stButton > button:hover {
-    background-color: #1a1a2e !important;
-    border-color: #fbbf24 !important;
-    color: #fbbf24 !important;
-    box-shadow: 0 0 16px rgba(251,191,36,0.2) !important;
-    transform: translateY(-1px) !important;
-}
-.stButton > button:focus, .stButton > button:active {
-    background-color: #0d0d14 !important;
-    border-color: #fbbf24 !important;
-    color: #fbbf24 !important;
-    box-shadow: 0 0 12px rgba(251,191,36,0.25) !important;
-}
-
-@media (max-width: 768px) {
-    .mobile-only  { display: block !important; }
-    .desktop-only { display: none  !important; }
-    [data-testid="stMainBlockContainer"] {
-        padding: 1rem 1rem !important;
-    }
-    .hero-title { font-size: 3rem !important; }
+@media (max-width:768px) {
+    [data-testid="stMainBlockContainer"] { padding:1rem !important; }
+    .hero-title { font-size:3rem !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -334,74 +80,45 @@ button[kind="secondary"], .stButton > button {
 # ── Constants ─────────────────────────────────────────────────────────────────
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
-SYSTEM_PROMPT = """You are ManimAI - a world-class expert in Manim Community Edition v0.19 animations.
+VALID_RATE_FUNCS = {
+    "linear", "smooth", "rush_into", "rush_from", "slow_into", "double_smooth",
+    "there_and_back", "there_and_back_with_pause", "running_start", "wiggle",
+    "ease_in_quad", "ease_out_quad", "ease_in_out_quad",
+    "ease_in_cubic", "ease_out_cubic", "ease_in_out_cubic",
+    "ease_in_sine", "ease_out_sine", "ease_in_out_sine",
+}
+BANNED_IMPORTS = {"os", "sys", "subprocess", "shutil", "socket", "requests", "urllib",
+                  "pathlib", "ctypes", "multiprocessing", "http", "builtins"}
+BANNED_CALLS = {"exec", "eval", "open", "__import__", "compile", "input"}
 
-Given a natural-language description, output ONLY valid Python code using Manim CE.
+QUALITY = {  # flag, folder, fps, timeout(s)
+    "low":    ("-ql", "480p15", 15, 240),
+    "medium": ("-qm", "720p30", 30, 300),
+    "high":   ("-qh", "1080p60", 60, 480),
+}
+QUALITY_LABELS = {"low": "LOW · 480p", "medium": "MEDIUM · 720p", "high": "HIGH · 1080p"}
+
+SYSTEM_PROMPT = """You are ManimAI - an expert in Manim Community Edition v0.19.
+Given a description, output ONLY valid Python code.
 
 STRICT RULES:
-1. Start with: from manim import *
-2. Define exactly ONE class named GeneratedScene(Scene)
-3. All animation logic goes inside def construct(self)
-4. Use self.play(...) and self.wait(...) - never bare function calls
-5. Keep total runtime between 6-12 seconds - enough to show the full animation
-6. Use vivid colors, smooth transitions, visually rich designs
-7. Output RAW Python only - no markdown, no backticks, no explanation
-8. Code must be 100% runnable with: manim render -ql scene.py GeneratedScene
+1. Start with: from manim import *  (and import numpy as np if you use np)
+2. Define exactly ONE class named GeneratedScene(Scene); logic inside construct(self)
+3. Use self.play(...) and self.wait(...); total runtime 6-12 seconds
+4. Vivid colors, smooth transitions. RAW Python only - no markdown, no backticks, no explanation
+5. Must run with: manim render -ql scene.py GeneratedScene
+6. NEVER use Tex/MathTex/LaTeX - use Text() only. NEVER use ThreeDScene.
+7. NEVER import os/sys/subprocess or read/write files.
+8. Loops: max 4-5 iterations, max 50 objects. Each self.play run_time 0.5-2.0s.
+9. Use ValueTracker + always_redraw for continuous motion (waves, drawing).
+10. Put self.wait() between major steps.
 
-ANIMATION QUALITY RULES:
-- For math/wave animations: use ValueTracker + always_redraw for smooth continuous motion
-- For Fourier/wave: use ParametricFunction or FunctionGraph, update with ValueTracker
-- For sorting algorithms: use simple Rectangle bars with fixed positions, animate one swap at a time
-- For complex scenes: build objects first, then animate - never animate while building
-- Keep loops short: max 4-5 iterations to avoid timeout
-- Each self.play() should have run_time between 0.5 and 2.0 seconds
-- Total self.play() run_times should add up to 6-10 seconds
+VALID rate_func ONLY: linear, smooth, rush_into, rush_from, slow_into, double_smooth,
+there_and_back, there_and_back_with_pause, running_start, wiggle, ease_in/out/in_out_(quad|cubic|sine).
+VALID colors: RED, BLUE, GREEN, YELLOW, ORANGE, PURPLE, WHITE, BLACK, GRAY, PINK, TEAL, GOLD, MAROON,
+DARK_BLUE, LIGHT_GRAY or hex like "#ff6600"."""
 
-SMOOTH ANIMATION PATTERNS (use these for glitch-free results):
-
-For continuous motion (waves, drawing):
-  tracker = ValueTracker(0)
-  wave = always_redraw(lambda: FunctionGraph(
-      lambda x: np.sin(x), x_range=[-5, max(-4.99, tracker.get_value())],
-      color=BLUE))
-  self.add(wave)
-  self.play(tracker.animate.set_value(5), run_time=4, rate_func=linear)
-
-For Fourier series (add harmonics one by one):
-  axes = Axes(x_range=[-PI, PI], y_range=[-2, 2])
-  self.add(axes)
-  # Draw each harmonic as a separate FunctionGraph, use Create() to draw them
-  for n in [1, 3, 5]:
-      graph = axes.plot(lambda x, n=n: sum(
-          4/(k*PI)*np.sin(k*x) for k in range(1, n+1, 2)), color=BLUE)
-      self.play(Create(graph), run_time=1.5, rate_func=smooth)
-      self.wait(0.5)
-
-ALWAYS USE always_redraw() for anything that moves continuously.
-NEVER use loops with many iterations - max 4 iterations.
-
-VALID rate_func VALUES - ONLY these, never invent:
-  linear, smooth, rush_into, rush_from, slow_into, double_smooth,
-  there_and_back, there_and_back_with_pause, running_start, wiggle,
-  ease_in_quad, ease_out_quad, ease_in_out_quad,
-  ease_in_cubic, ease_out_cubic, ease_in_out_cubic,
-  ease_in_sine, ease_out_sine, ease_in_out_sine
-Default: rate_func=smooth
-
-VALID COLORS:
-  RED, BLUE, GREEN, YELLOW, ORANGE, PURPLE, WHITE, BLACK,
-  GRAY, GREY, PINK, TEAL, GOLD, MAROON, DARK_BLUE, LIGHT_GRAY
-  or hex like "#ff6600"
-
-AVOID:
-- NEVER invent rate_func names
-- NEVER use np.sin inside always_redraw without importing numpy (use import numpy as np at top)
-- NEVER create more than 50 objects in a loop
-- NEVER use Tex, MathTex, or any LaTeX — ALWAYS use Text() instead, no exceptions
-- NEVER use 3D scenes (ThreeDScene) - stick to regular Scene
-- NEVER skip self.wait() between major animation steps"""
-
-RETRY_PROMPT = """The following Manim code produced this error:
+RETRY_PROMPT = """This Manim code failed.
 
 CODE:
 {code}
@@ -409,265 +126,184 @@ CODE:
 ERROR:
 {error}
 
-Fix the code. Replace any invalid rate_func names with: smooth
-Keep the class name as GeneratedScene.
-Output ONLY the fixed raw Python code, no explanation, no backticks."""
+Fix it. Keep class name GeneratedScene. Replace invalid rate_func names with smooth.
+Never use LaTeX. Output ONLY the fixed raw Python code."""
+
+EXAMPLES = ["Bouncing neon ball", "Pythagorean theorem", "Fourier wave series", "Solar system orbits",
+            "Fibonacci spiral", "Atom with electrons", "Sine wave drawing", "Text morphing A to Z"]
 
 # ── Session state ─────────────────────────────────────────────────────────────
-for k, v in {
-    "generated_code": "",
-    "video_path": "",
-    "render_error": "",
-    "history": [],
-    "groq_api_key": "",
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+for k, v in {"generated_code": "", "video_path": "", "render_error": "",
+             "history": [], "groq_api_key": "", "quality": "medium", "prompt_box": ""}.items():
+    st.session_state.setdefault(k, v)
+
+if not st.session_state["groq_api_key"]:  # env / secrets fallback
+    env_key = os.environ.get("GROQ_API_KEY", "")
+    if not env_key:
+        try:
+            env_key = st.secrets.get("GROQ_API_KEY", "")
+        except Exception:
+            env_key = ""
+    st.session_state["groq_api_key"] = env_key.strip()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def sanitize(text: str) -> str:
-    """Strip non-ASCII so Windows httpx header encoding never crashes."""
-    text = unicodedata.normalize("NFKD", text)
-    return text.encode("ascii", errors="ignore").decode("ascii").strip()
-
-GROQ_CLIENT = None
-
-def get_groq_client():
-    global GROQ_CLIENT
-    key = st.session_state.get("groq_api_key", "").strip()
+def get_client():
+    key = st.session_state["groq_api_key"]
     if not key:
         return None
-    if GROQ_CLIENT is None:
-        GROQ_CLIENT = Groq(api_key=key)
-    return GROQ_CLIENT
+    if st.session_state.get("_client_key") != key:
+        st.session_state["_client"] = Groq(api_key=key)
+        st.session_state["_client_key"] = key
+    return st.session_state["_client"]
+
 
 def clean_code(raw: str) -> str:
-    raw = re.sub(r"^```python\s*\n?", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"^```\s*\n?",       "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\n?```\s*$",       "", raw, flags=re.MULTILINE)
-    return raw.strip()
+    m = re.search(r"```(?:python)?\s*\n(.*?)```", raw, flags=re.DOTALL)
+    if m:
+        raw = m.group(1)
+    raw = raw.strip()
+    # replace invalid rate funcs
+    raw = re.sub(r"rate_func\s*=\s*(\w+)",
+                 lambda m: m.group(0) if m.group(1) in VALID_RATE_FUNCS else "rate_func=smooth", raw)
+    if "from manim import" not in raw:
+        raw = "from manim import *\n" + raw
+    return raw
 
-def fix_manim_code(bad_code: str, error: str) -> str:
-    """Ask Groq to auto-fix broken Manim code given the error message."""
-    client = get_groq_client()
+
+def validate_code(code: str) -> str:
+    """Return an error string if the code is unsafe/invalid, else ''."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return f"SyntaxError: {e}"
+    if not any(isinstance(n, ast.ClassDef) and n.name == "GeneratedScene" for n in tree.body):
+        return "Missing class GeneratedScene"
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            mods = {a.name.split(".")[0] for a in n.names}
+        elif isinstance(n, ast.ImportFrom):
+            mods = {(n.module or "").split(".")[0]}
+        else:
+            mods = set()
+        if mods & BANNED_IMPORTS:
+            return f"Blocked import: {mods & BANNED_IMPORTS}"
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in BANNED_CALLS:
+            return f"Blocked call: {n.func.id}()"
+    return ""
+
+
+def ask_groq(messages, temperature) -> str:
+    client = get_client()
     if client is None:
-        return ""
-    fix_prompt = RETRY_PROMPT.format(code=bad_code, error=sanitize(error[:1500]))
-    resp = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[{"role": "user", "content": fix_prompt}],
-        temperature=0.2,
-        max_tokens=2048,
-    )
-    return clean_code(resp.choices[0].message.content.strip())
+        raise RuntimeError("Please add your Groq API key first.")
+    resp = client.chat.completions.create(model=GROQ_MODEL, messages=messages,
+                                          temperature=temperature, max_tokens=4096)
+    return clean_code(resp.choices[0].message.content or "")
 
-def generate_manim_code(prompt: str) -> str:
-    client = get_groq_client()
-    if client is None:
-        st.error("Please enter your Groq API key in the sidebar first.")
-        return ""
-    safe = sanitize(prompt)
-    resp = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": f"Create a Manim animation for: {safe}"},
-        ],
-        temperature=0.4,
-        max_tokens=2048,
-    )
-    raw = resp.choices[0].message.content.strip()
-    raw = re.sub(r"^```python\s*\n?", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"^```\s*\n?",       "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\n?```\s*$",       "", raw, flags=re.MULTILINE)
-    return raw.strip()
 
-def render_manim(code: str, quality: str = "medium") -> tuple[bool, str, str]:
-    """
-    Cross-platform Manim renderer (Windows + Linux/Streamlit Cloud).
-    quality: "low" (480p15), "medium" (720p30), "high" (1080p60)
-    """
-    import threading, time, platform
-
-    IS_WINDOWS = platform.system() == "Windows"
-
-    if IS_WINDOWS:
-        work_dir = "C:\\manim_tmp"
-    else:
-        work_dir = os.path.join(os.path.expanduser("~"), "manim_tmp")
-
-    out_dir    = os.path.join(work_dir, "output")
-    stable     = os.path.join(work_dir, "latest.mp4")
-    scene_file = os.path.join(work_dir, "scene.py")
-
-    os.makedirs(work_dir, exist_ok=True)
-    os.makedirs(out_dir,  exist_ok=True)
-
-    with open(scene_file, "w", encoding="utf-8") as f:
-        f.write(code)
-
-    # Clean old output
-    if os.path.exists(out_dir):
-        shutil.rmtree(out_dir, ignore_errors=True)
-    os.makedirs(out_dir, exist_ok=True)
-
-    # ── Quality settings ─────────────────────────────────────────────────────
-    quality_map = {
-        "low":    ("-ql", "480p15",  15, 240),
-        "medium": ("-qm", "720p30",  30, 300),
-        "high":   ("-qh", "1080p60", 60, 420),
-    }
-    q_flag, q_folder, q_fps, q_timeout = quality_map.get(quality, quality_map["medium"])
-
-    # ── Attempt 1: Normal render ──────────────────────────────────────────────
-    partial_root = os.path.join(out_dir, "videos", "scene", q_folder,
-                                "partial_movie_files", "GeneratedScene")
-    concat_path  = os.path.join(partial_root, "partial_movie_file_list.txt")
-
-    stop_evt = threading.Event()
-    def patcher():
-        while not stop_evt.is_set():
-            if os.path.exists(concat_path):
-                try:
-                    txt = open(concat_path, encoding="utf-8").read()
-                    if "\\" in txt:
-                        open(concat_path, "w", encoding="utf-8").write(
-                            txt.replace("\\", "/"))
-                except: pass
-            time.sleep(0.01)
-    threading.Thread(target=patcher, daemon=True).start()
-
-    r1 = subprocess.run(
-        ["manim", "render", q_flag, "--disable_caching",
-         "--media_dir", out_dir, scene_file, "GeneratedScene"],
-        capture_output=True, text=True, cwd=work_dir,
-        timeout=q_timeout, encoding="utf-8", errors="replace",
-    )
-    stop_evt.set()
-    log1 = (r1.stderr + "\n" + r1.stdout).strip()
-
-    # Check for final MP4 in any quality subfolder
-    final_mp4 = None
-    for root, dirs, files in os.walk(out_dir):
-        # Skip partial_movie_files folders
+def _find_mp4(out_dir):
+    for root, _, files in os.walk(out_dir):
         if "partial_movie_files" in root:
             continue
         for f in files:
             if f.endswith(".mp4"):
-                final_mp4 = os.path.join(root, f)
-                break
-        if final_mp4:
-            break
+                return os.path.join(root, f)
+    return None
 
-    if final_mp4 and os.path.exists(final_mp4):
-        shutil.copy2(final_mp4, stable)
-        return True, stable, ""
 
-    # ── Attempt 2: PNG frame export → ffmpeg encode ───────────────────────────
-    # Clean output and re-render as PNG frames (avoids PyAV entirely)
-    shutil.rmtree(out_dir, ignore_errors=True)
+def render_manim(code: str, quality: str = "medium"):
+    """Returns (ok, video_path, error). Uses a unique temp dir per render."""
+    q_flag, q_folder, q_fps, q_timeout = QUALITY.get(quality, QUALITY["medium"])
+    work = tempfile.mkdtemp(prefix="manim_")
+    out_dir = os.path.join(work, "output")
+    scene = os.path.join(work, "scene.py")
+    stable = os.path.join(work, "latest.mp4")
     os.makedirs(out_dir, exist_ok=True)
+    with open(scene, "w", encoding="utf-8") as f:
+        f.write(code)
 
-    r2 = subprocess.run(
-        ["manim", "render", q_flag, "--disable_caching",
-         "--media_dir", out_dir,
-         "--format", "png",
-         scene_file, "GeneratedScene"],
-        capture_output=True, text=True, cwd=work_dir,
-        timeout=240, encoding="utf-8", errors="replace",
-    )
-    log2 = (r2.stderr + "\n" + r2.stdout).strip()
+    def run(extra=()):
+        return subprocess.run(
+            ["manim", "render", q_flag, "--disable_caching", "--media_dir", out_dir, *extra,
+             scene, "GeneratedScene"],
+            capture_output=True, text=True, cwd=work, timeout=q_timeout,
+            encoding="utf-8", errors="replace")
 
-    # Find folder with most PNG frames
-    frames_src = None
-    best_count = 0
-    for root, dirs, files in os.walk(out_dir):
-        pngs = [f for f in files if f.endswith(".png")]
-        if len(pngs) > best_count:
-            best_count = len(pngs)
-            frames_src = root
+    # Windows-only: fix backslashes in ffmpeg concat list while rendering
+    stop = threading.Event()
+    if platform.system() == "Windows":
+        concat = os.path.join(out_dir, "videos", "scene", q_folder,
+                              "partial_movie_files", "GeneratedScene", "partial_movie_file_list.txt")
+        def patcher():
+            while not stop.is_set():
+                try:
+                    if os.path.exists(concat):
+                        txt = open(concat, encoding="utf-8").read()
+                        if "\\" in txt:
+                            open(concat, "w", encoding="utf-8").write(txt.replace("\\", "/"))
+                except OSError:
+                    pass
+                time.sleep(0.05)
+        threading.Thread(target=patcher, daemon=True).start()
 
-    if frames_src and best_count > 0:
-        fps = q_fps
-
-        # Sort frames numerically
-        pngs_sorted = sorted(
-            [os.path.join(frames_src, f)
-             for f in os.listdir(frames_src) if f.endswith(".png")],
-            key=lambda x: int(''.join(filter(str.isdigit,
-                              os.path.splitext(os.path.basename(x))[0])) or '0')
-        )
-
-        # Write concat with duration per frame
-        concat_txt = os.path.join(work_dir, "frames.txt")
-        frame_dur  = round(1.0 / fps, 6)
-        with open(concat_txt, "w", encoding="utf-8") as cf:
-            for i, p in enumerate(pngs_sorted):
-                safe = p.replace("\\", "/")
-                cf.write(f"file '{safe}'\n")
-                cf.write(f"duration {frame_dur}\n")
-            # ffmpeg needs last frame repeated to flush
-            if pngs_sorted:
-                cf.write(f"file '{pngs_sorted[-1].replace(chr(92), '/')}'\n")
-
-        concat_fwd = concat_txt.replace("\\", "/")
-        ff = subprocess.run(
-            ["ffmpeg", "-y",
-             "-f", "concat", "-safe", "0",
-             "-i", concat_fwd,
-             "-vf", "fps=30",           # smooth up to 30fps output
-             "-c:v", "libx264",
-             "-preset", "fast",
-             "-crf", "18",              # high quality
-             "-pix_fmt", "yuv420p",
-             "-movflags", "+faststart",
-             stable],
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace"
-        )
-        if ff.returncode == 0 and os.path.exists(stable):
+    try:
+        try:
+            r1 = run()
+        except subprocess.TimeoutExpired:
+            return False, "", f"Render timed out after {q_timeout}s. Try LOW quality or a simpler prompt."
+        finally:
+            stop.set()
+        log1 = (r1.stderr + "\n" + r1.stdout).strip()
+        mp4 = _find_mp4(out_dir)
+        if mp4:
+            shutil.copy2(mp4, stable)
             return True, stable, ""
 
-        return False, "", (
-            f"PNG encode failed:\n{ff.stderr[:500]}\n\n"
-            f"Attempt 1:\n{log1[:400]}\n\n"
-            f"Attempt 2:\n{log2[:400]}"
-        )
+        # Fallback: PNG frames -> ffmpeg
+        shutil.rmtree(out_dir, ignore_errors=True)
+        os.makedirs(out_dir, exist_ok=True)
+        try:
+            r2 = run(("--format", "png"))
+        except subprocess.TimeoutExpired:
+            return False, "", f"Fallback render timed out.\n\n{log1[-700:]}"
+        log2 = (r2.stderr + "\n" + r2.stdout).strip()
 
-    return False, "", f"Render failed.\n\nAttempt 1:\n{log1[:600]}\n\nAttempt 2:\n{log2[:600]}"
+        best, src = 0, None
+        for root, _, files in os.walk(out_dir):
+            n = sum(f.endswith(".png") for f in files)
+            if n > best:
+                best, src = n, root
+        if not src:
+            return False, "", f"Render failed.\n\nAttempt 1:\n{log1[-700:]}\n\nAttempt 2:\n{log2[-700:]}"
+
+        pngs = sorted((os.path.join(src, f) for f in os.listdir(src) if f.endswith(".png")),
+                      key=lambda p: int("".join(filter(str.isdigit, os.path.basename(p))) or 0))
+        list_file = os.path.join(work, "frames.txt")
+        with open(list_file, "w", encoding="utf-8") as cf:
+            for p in pngs:
+                cf.write(f"file '{p.replace(chr(92), '/')}'\nduration {round(1 / q_fps, 6)}\n")
+            cf.write(f"file '{pngs[-1].replace(chr(92), '/')}'\n")
+        ff = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file.replace("\\", "/"),
+             "-vf", "fps=30", "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", stable],
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if ff.returncode == 0 and os.path.exists(stable):
+            return True, stable, ""
+        return False, "", f"PNG encode failed:\n{ff.stderr[-500:]}\n\nAttempt 1:\n{log1[-400:]}"
+    except FileNotFoundError as e:
+        return False, "", f"Missing executable: {e}. Make sure manim and ffmpeg are installed and on PATH."
 
 
-# ══════════════════════════════════════════════════════════════
-# SIDEBAR (desktop)
-# ══════════════════════════════════════════════════════════════
+def use_example(text):
+    st.session_state["prompt_box"] = text
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### Groq API Key")
-    st.markdown(
-        "Get your **free** key at "
-        "[console.groq.com](https://console.groq.com) "
-        "— no credit card needed."
-    )
-    key_input = st.text_input(
-        "Groq API Key",
-        type="password",
-        placeholder="gsk_...",
-        label_visibility="collapsed",
-        key="key_field",
-    )
-    if key_input:
-        st.session_state["groq_api_key"] = key_input.strip()
-        GROQ_CLIENT = None
-
-    if st.session_state["groq_api_key"]:
-        st.success("Key saved!")
-    else:
-        st.warning("No key yet")
-
-    st.markdown("---")
     st.markdown("### Model")
     st.code(GROQ_MODEL)
     st.caption("Llama 3.3 70B — fast, free, great at code")
-
     st.markdown("---")
     st.markdown("### Prompt Tips")
     st.markdown("""
@@ -676,190 +312,111 @@ with st.sidebar:
 - *"letter A morphing to B"*
 - *"spiral galaxy forming from dots"*
 - *"sine and cosine waves together"*
-    """)
-    st.markdown("---")
+""")
     st.caption("ManimAI — Groq + Manim CE")
 
-# ══════════════════════════════════════════════════════════════
-# MAIN PAGE
-# ══════════════════════════════════════════════════════════════
+# ── Main page ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="hero-badge">Powered by Groq - 100% Free</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-title">Manim<span>AI</span></div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="hero-sub">Describe any animation in plain English — get a rendered video in seconds.</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="hero-sub">Describe any animation in plain English — get a rendered video in seconds.</div>',
+            unsafe_allow_html=True)
 
-# ── Mobile API key card (visible only on small screens) ──────────────────────
-st.markdown('<div class="mobile-only">', unsafe_allow_html=True)
-st.markdown("""
-<div class="mobile-api-card">
-  <div class="mobile-api-title">Groq API Key (Free)</div>
-  <div class="mobile-api-sub">
-    Get your free key at <a href="https://console.groq.com" target="_blank">console.groq.com</a>
-    — no credit card needed.
-  </div>
-</div>
-""", unsafe_allow_html=True)
+# One API key input for all screen sizes
+has_key = bool(st.session_state["groq_api_key"])
+with st.expander("🔑 Groq API key" + (" ✓" if has_key else " (required)"), expanded=not has_key):
+    st.markdown("Get a **free** key at [console.groq.com](https://console.groq.com) — no credit card needed.")
+    key_in = st.text_input("Groq API key", type="password", placeholder="gsk_...",
+                           label_visibility="collapsed", key="key_field")
+    if key_in and key_in.strip() != st.session_state["groq_api_key"]:
+        st.session_state["groq_api_key"] = key_in.strip()
+        st.rerun()
 
-mob_key = st.text_input(
-    "Mobile API Key",
-    type="password",
-    placeholder="gsk_...",
-    label_visibility="collapsed",
-    key="mob_key_field",
-)
-if mob_key:
-    st.session_state["groq_api_key"] = mob_key.strip()
-    GROQ_CLIENT = None
+# Clickable example chips
+cols = st.columns(4)
+for i, ex in enumerate(EXAMPLES):
+    cols[i % 4].button(ex, key=f"ex_{i}", on_click=use_example, args=(ex,), use_container_width=True)
 
-if st.session_state["groq_api_key"]:
-    st.markdown(
-        '<div class="key-saved"><span class="dot-g"></span> Key saved</div>',
-        unsafe_allow_html=True
-    )
-st.markdown("</div>", unsafe_allow_html=True)
-st.markdown("<br>", unsafe_allow_html=True)
+prompt = st.text_area("Your animation prompt", height=130, key="prompt_box",
+                      placeholder="e.g. A glowing blue sine wave draws itself left to right, then a red cosine wave appears below it")
 
-EXAMPLES = [
-    "Bouncing neon ball", "Pythagorean theorem", "Fourier wave series",
-    "Solar system orbits", "Fibonacci spiral", "Atom with electrons",
-    "Sine wave drawing",  "Text morphing A to Z",
-]
-st.markdown(
-    "".join(f'<span class="tag">{e}</span>' for e in EXAMPLES),
-    unsafe_allow_html=True,
-)
-st.markdown("<br>", unsafe_allow_html=True)
+st.radio("Render quality", list(QUALITY_LABELS), format_func=QUALITY_LABELS.get,
+         key="quality", horizontal=True)
 
-prompt = st.text_area(
-    "Your animation prompt",
-    placeholder="e.g. A glowing blue sine wave draws itself left to right, then a red cosine wave appears below it",
-    height=130,
-    key="prompt_box",
-)
-
-# ── Quality selector ─────────────────────────────────────────────────────────
-st.markdown("""
-<div style="margin-bottom:0.4rem">
-  <span style="font-size:0.75rem;font-weight:700;letter-spacing:0.1em;
-               text-transform:uppercase;color:#fbbf24;">Render Quality</span>
-</div>
-""", unsafe_allow_html=True)
-
-q_col1, q_col2, q_col3 = st.columns(3)
-with q_col1:
-    q_low = st.button("LOW  —  480p", use_container_width=True,
-                      help="Fastest — 480p 15fps. Good for testing.")
-with q_col2:
-    q_med = st.button("MEDIUM  —  720p", use_container_width=True,
-                      help="Balanced — 720p 30fps. Recommended.")
-with q_col3:
-    q_hi  = st.button("HIGH  —  1080p", use_container_width=True,
-                       help="Best quality — 1080p 60fps. Slower render.")
-
-if q_low:
-    st.session_state["quality"] = "low"
-elif q_med:
-    st.session_state["quality"] = "medium"
-elif q_hi:
-    st.session_state["quality"] = "high"
-
-if "quality" not in st.session_state:
-    st.session_state["quality"] = "medium"
-
-quality_labels = {"low": "LOW 480p", "medium": "MEDIUM 720p", "high": "HIGH 1080p"}
-st.caption(f"Selected: **{quality_labels[st.session_state['quality']]}**")
-
-st.markdown("<br>", unsafe_allow_html=True)
 btn_col, _ = st.columns([2, 3])
-with btn_col:
-    go = st.button("Generate Animation", use_container_width=True)
-
+go = btn_col.button("Generate Animation", type="primary", use_container_width=True)
 st.markdown("---")
 
-# ── Generation pipeline ───────────────────────────────────────────────────────
+# ── Pipeline ──────────────────────────────────────────────────────────────────
 if go:
     if not st.session_state["groq_api_key"]:
-        st.error("Please paste your free Groq API key — on desktop use the sidebar, on mobile enter it above.")
+        st.error("Please add your free Groq API key above.")
     elif not prompt.strip():
-        st.warning("Please type an animation description above.")
+        st.warning("Please type an animation description.")
     else:
-        st.session_state.update({"video_path": "", "render_error": "", "generated_code": ""})
+        st.session_state.update(video_path="", render_error="", generated_code="")
+        quality = st.session_state["quality"]
+        ok, video, err, code = False, "", "", ""
+        with st.status("Working...", expanded=True) as status:
+            try:
+                st.write("✍️ Groq is writing Manim code...")
+                code = ask_groq([{"role": "system", "content": SYSTEM_PROMPT},
+                                 {"role": "user", "content": f"Create a Manim animation for: {prompt.strip()}"}], 0.4)
+                st.session_state["generated_code"] = code
 
-        # Step 1 — generate code
-        with st.spinner("Groq is writing Manim code..."):
-            code = generate_manim_code(prompt.strip())
+                for attempt in (1, 2):  # attempt 2 = auto-fix
+                    bad = validate_code(code)
+                    if bad:
+                        ok, video, err = False, "", bad
+                    else:
+                        st.write(f"🎞️ Rendering at {QUALITY_LABELS[quality]}...")
+                        ok, video, err = render_manim(code, quality)
+                    if ok or attempt == 2:
+                        break
+                    st.write("🔧 First attempt failed — asking Groq to fix it...")
+                    code = ask_groq([{"role": "user",
+                                      "content": RETRY_PROMPT.format(code=code, error=err[:1500])}], 0.2)
+                    st.session_state["generated_code"] = code
+            except Exception as e:  # API/key/rate-limit errors
+                ok, err = False, f"{type(e).__name__}: {e}"
+            status.update(label="Animation ready!" if ok else "Failed",
+                          state="complete" if ok else "error", expanded=False)
 
-        if code:
-            st.session_state["generated_code"] = code
-
-            # Step 2 — first render attempt
-            with st.spinner(f"Rendering at {quality_labels[st.session_state.get('quality', 'medium')]}... (~15-60s)"):
-                try:
-                    success, video_path, err = render_manim(code, st.session_state.get("quality", "medium"))
-                except subprocess.TimeoutExpired:
-                    success, video_path, err = False, "", "Render timed out after 120s."
-
-            # Step 3 — auto-retry: ask Groq to fix the error and try once more
-            if not success and err:
-                st.info("First attempt failed — asking Groq to auto-fix the code...")
-                with st.spinner("Groq is fixing the error..."):
-                    fixed_code = fix_manim_code(code, err)
-                if fixed_code:
-                    st.session_state["generated_code"] = fixed_code
-                    with st.spinner("Re-rendering with fixed code..."):
-                        try:
-                            success, video_path, err = render_manim(fixed_code, st.session_state.get("quality", "medium"))
-                        except subprocess.TimeoutExpired:
-                            success, video_path, err = False, "", "Render timed out after 120s."
-
-            if success:
-                st.session_state["video_path"] = video_path
-                st.session_state["history"].append({
-                    "prompt": prompt.strip(),
-                    "code": st.session_state["generated_code"],
-                    "video": video_path,
-                })
-                st.success("Animation ready!")
-            else:
-                st.session_state["render_error"] = err
-                st.error("Manim render failed — see error details below.")
+        if ok:
+            st.session_state["video_path"] = video
+            st.session_state["history"].append({"prompt": prompt.strip(), "code": code, "video": video})
+        else:
+            st.session_state["render_error"] = err
+            st.error("Something went wrong — see error details below.")
 
 # ── Results ───────────────────────────────────────────────────────────────────
-if st.session_state["video_path"]:
+vp = st.session_state["video_path"]
+if vp and os.path.exists(vp):
     col_v, col_c = st.columns([3, 2])
     with col_v:
         st.markdown('<div class="sec-title">Your Animation</div>', unsafe_allow_html=True)
-        st.video(st.session_state["video_path"])
-        with open(st.session_state["video_path"], "rb") as f:
-            st.download_button(
-                "Download MP4", f,
-                file_name="manim_animation.mp4",
-                mime="video/mp4",
-            )
+        st.video(vp)
+        with open(vp, "rb") as f:
+            st.download_button("Download MP4", f.read(), file_name="manim_animation.mp4", mime="video/mp4")
     with col_c:
         st.markdown('<div class="sec-title">Generated Code</div>', unsafe_allow_html=True)
         st.code(st.session_state["generated_code"], language="python")
-
 elif st.session_state["generated_code"]:
     st.markdown('<div class="sec-title">Generated Code</div>', unsafe_allow_html=True)
     st.code(st.session_state["generated_code"], language="python")
 
 if st.session_state["render_error"]:
-    with st.expander("Render Error Details"):
+    with st.expander("Error details"):
         st.code(st.session_state["render_error"], language="bash")
- 
+
 # ── History ───────────────────────────────────────────────────────────────────
 if st.session_state["history"]:
     st.markdown("---")
     st.markdown('<div class="sec-title">Session History</div>', unsafe_allow_html=True)
+    n = len(st.session_state["history"])
     for i, item in enumerate(reversed(st.session_state["history"])):
-        label = f"#{len(st.session_state['history'])-i}  -  {item['prompt'][:60]}{'...' if len(item['prompt'])>60 else ''}"
-        with st.expander(label):
-            hc1, hc2 = st.columns([3, 2])
-            with hc1:
-                if os.path.exists(item["video"]):
-                    st.video(item["video"])
-            with hc2:
-                st.code(item["code"], language="python")
+        p = item["prompt"]
+        with st.expander(f"#{n - i} - {p[:60]}{'...' if len(p) > 60 else ''}"):
+            h1, h2 = st.columns([3, 2])
+            if os.path.exists(item["video"]):
+                h1.video(item["video"])
+            h2.code(item["code"], language="python")
